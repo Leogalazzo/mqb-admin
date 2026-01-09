@@ -1,41 +1,49 @@
-// --- CREDENCIALES (Solicitadas por el usuario) ---
-const AUTH_DATA = {
-    email: "admin@gmail.com",
-    pass: "123456"
-};
+import { signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
-// --- MOTOR DE LOGIN ---
-document.getElementById('form-login').onsubmit = (e) => {
+// --- MOTOR DE LOGIN CON FIREBASE ---
+document.getElementById('form-login').onsubmit = async (e) => {
     e.preventDefault();
 
     const emailInput = document.getElementById('login-email').value;
     const passInput = document.getElementById('login-pass').value;
 
-    // Validación local
-    if (emailInput === AUTH_DATA.email && passInput === AUTH_DATA.pass) {
-        // Guardar sesión en localStorage
-        localStorage.setItem('mb_session', JSON.stringify({
-            loggedIn: true,
-            user: "Admin",
-            timestamp: new Date().getTime()
-        }));
-
+    try {
+        // Intento de inicio de sesión en Firebase
+        await signInWithEmailAndPassword(window.auth, emailInput, passInput);
+        
         showLoginToast("Acceso concedido. Redirigiendo...", "success");
 
-        // Redirigir al dashboard después de un breve delay
+        // Firebase mantiene la sesión, solo redirigimos
         setTimeout(() => {
             window.location.href = "index.html";
         }, 1500);
-    } else {
-        showLoginToast("Credenciales incorrectas", "error");
+
+    } catch (error) {
+        console.error("Error de login:", error.code);
+        
+        let mensajeError = "Credenciales incorrectas";
+        
+        // Manejo de errores específicos
+        if (error.code === 'auth/invalid-credential') {
+            mensajeError = "Usuario o contraseña no válidos";
+        } else if (error.code === 'auth/user-not-found') {
+            mensajeError = "El usuario no existe";
+        } else if (error.code === 'auth/wrong-password') {
+            mensajeError = "Contraseña incorrecta";
+        } else if (error.code === 'auth/too-many-requests') {
+            mensajeError = "Demasiados intentos. Intenta más tarde";
+        }
+
+        showLoginToast(mensajeError, "error");
     }
 };
 
-// --- SISTEMA DE TOASTS PARA LOGIN ---
+// --- SISTEMA DE TOASTS ---
 function showLoginToast(message, type = 'success') {
     const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
+    if (!container) return;
     
+    const toast = document.createElement('div');
     const colors = type === 'success' ? 'border-green-500' : 'border-red-500';
     const icon = type === 'success' ? 'fa-check-circle text-green-500' : 'fa-exclamation-circle text-red-500';
 
