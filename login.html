@@ -16,9 +16,12 @@
         <div class="absolute top-0 left-0 w-full h-2 bg-blue-600"></div>
         
         <div class="text-center mb-8">
-            <div class="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-                <i class="fas fa-hamburger text-3xl"></i>
+            <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+                <img src="https://imagedelivery.net/ut8GNCA1obOu4JnXrJ_J9Q/e7b59903-06e0-48f8-1bb1-71bd6da8a800/public" 
+                     alt="Logo Mas que Burger's" 
+                     class="w-full h-full object-contain drop-shadow-md">
             </div>
+            
             <h1 class="text-2xl font-black text-slate-800 uppercase tracking-tight">Mas que Burger's</h1>
             <p class="text-slate-400 text-sm font-medium">Administración</p>
         </div>
@@ -54,6 +57,22 @@
         </div>
     </div>
 
-    <script src="login.js"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBx_NozaAUD7jxylWbUYCu7TzM3Ylf20DM",
+            authDomain: "mas-que-burgers-admin.firebaseapp.com",
+            projectId: "mas-que-burgers-admin",
+            storageBucket: "mas-que-burgers-admin.firebasestorage.app",
+            messagingSenderId: "305904131504",
+            appId: "1:305904131504:web:0d9ea8e6bea1efff0bca75"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        window.auth = getAuth(app);
+    </script>
+    <script src="login.js" type="module"></script>
 </body>
-</html> 
+</html>
