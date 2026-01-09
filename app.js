@@ -1,29 +1,88 @@
-// --- VERIFICACIÓN DE SEGURIDAD AL INICIO ---
-(function checkAuth() {
-    const session = JSON.parse(localStorage.getItem('mb_session'));
-    if (!session || !session.loggedIn) {
+import { 
+    collection, addDoc, onSnapshot, query, where, 
+    doc, deleteDoc, updateDoc, getDocs, writeBatch, orderBy 
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+onAuthStateChanged(window.auth, (user) => {
+    if (!user) {
         window.location.href = "login.html";
     }
-})();
+});
+// --- ESTADO LOCAL PARA RENDEREADO ---
+let boletas = [];
+let historial = [];
+let empleados = [];
+let proveedores = [];
+let ventasDiarias = [];
+let currentFilter = 'todos';
 
-// --- ESTADO Y DATOS ---
-let boletas = JSON.parse(localStorage.getItem('mb_boletas')) || [];
-let historial = JSON.parse(localStorage.getItem('mb_historial')) || [];
-let empleados = JSON.parse(localStorage.getItem('mb_empleados')) || [];
-let proveedores = JSON.parse(localStorage.getItem('mb_proveedores')) || [];
-let currentFilter = 'todos'; 
+// --- UTILIDADES DE FECHA ---
+function getFechaOperativa() {
+    const ahora = new Date();
+    if (ahora.getHours() < 4) {
+        ahora.setDate(ahora.getDate() - 1);
+    }
+    const y = ahora.getFullYear();
+    const m = String(ahora.getMonth() + 1).padStart(2, '0');
+    const d = String(ahora.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function formatDateForDisplay(isoDate) { // isoDate → "2026-01-08"
+    if (!isoDate) return '';
+    const [y, m, d] = isoDate.split('-');
+    return `${d} - ${m} - ${y}`;
+}
 
 // --- INICIALIZACIÓN ---
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('current-date').innerText = new Date().toLocaleDateString('es-AR', { 
+    // Fecha actual formateada para visualización
+    const today = new Date();
+    document.getElementById('current-date').innerText = today.toLocaleDateString('es-AR', { 
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
     });
-    updateDashboard();
+
+    // Iniciar escuchas en tiempo real
+    setupListeners();
+
+    const btnCerrar = document.getElementById('btn-cerrar-caja');
+    if (btnCerrar) btnCerrar.onclick = handleCerrarCaja;
 });
 
-// --- SISTEMA DE AVISOS ---
+// --- ESCUCHAS EN TIEMPO REAL (FIRESTORE) ---
+function setupListeners() {
+    onSnapshot(collection(window.db, "empleados"), (snapshot) => {
+        empleados = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateEmpleadosTable();
+    });
+
+    onSnapshot(collection(window.db, "proveedores"), (snapshot) => {
+        proveedores = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateProveedoresGrid();
+    });
+
+    onSnapshot(collection(window.db, "boletas"), (snapshot) => {
+        boletas = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateBoletasTable();
+        updateDashboard();
+    });
+
+    onSnapshot(collection(window.db, "ventas"), (snapshot) => {
+        ventasDiarias = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateVentasUI();
+    });
+
+    onSnapshot(query(collection(window.db, "historial"), orderBy("fechaCierre", "desc")), (snapshot) => {
+        historial = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateHistorialTable();
+    });
+}
+
+// --- UTILIDADES UI ---
 function showToast(message) {
     const container = document.getElementById('toast-container');
+    if (!container) return;
     const toast = document.createElement('div');
     toast.className = 'toast-msg bg-slate-900 text-white px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 border-l-4 border-green-500';
     toast.innerHTML = `<i class="fas fa-check-circle text-green-500"></i> <span class="text-sm font-bold">${message}</span>`;
@@ -45,8 +104,8 @@ function customConfirm({ title, text, okText = 'Confirmar', type = 'blue' }) {
         const btnCancel = document.getElementById('btn-confirm-cancel');
         const iconEl = document.getElementById('confirm-icon');
 
-        titleEl.innerText = title;
-        textEl.innerText = text;
+        titleEl.innerText = title; 
+        textEl.innerText = text; 
         btnOk.innerText = okText;
         
         if(type === 'red') {
@@ -71,215 +130,408 @@ function customConfirm({ title, text, okText = 'Confirmar', type = 'blue' }) {
     });
 }
 
-// Función Cerrar Sesión Definitiva
-async function logout() {
-    if(await customConfirm({ title: 'Cerrar Sesión', text: '¿Deseas salir del sistema?', okText: 'Salir' })) {
-        localStorage.removeItem('mb_session');
-        window.location.href = "login.html";
-    }
-}
-
 // --- NAVEGACIÓN ---
-function showSection(sectionId) {
+window.showSection = function(sectionId) {
     document.querySelectorAll('main section').forEach(s => s.classList.add('hidden'));
-    document.getElementById('sec-' + sectionId).classList.remove('hidden');
-    const titles = { 'dashboard': 'Dashboard', 'boletas': 'Gastos del Mes', 'empleados': 'Personal', 'proveedores': 'Proveedores', 'historial': 'Historial' };
-    document.getElementById('section-title').innerText = titles[sectionId];
-    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active-link'));
-    const activeBtn = Array.from(document.querySelectorAll('.nav-btn')).find(b => b.onclick.toString().includes(sectionId));
-    if(activeBtn) activeBtn.classList.add('active-link');
-    if(sectionId === 'dashboard') updateDashboard();
-    if(sectionId === 'boletas') updateBoletasTable();
-    if(sectionId === 'empleados') updateEmpleadosTable();
-    if(sectionId === 'proveedores') updateProveedoresGrid();
-    if(sectionId === 'historial') updateHistorialTable();
-}
+    const target = document.getElementById('sec-' + sectionId);
+    if(target) target.classList.remove('hidden');
 
-function openModal(id) { 
+    const titles = { 
+        'dashboard': 'Dashboard', 'boletas': 'Gastos del Mes', 
+        'empleados': 'Personal', 'proveedores': 'Proveedores', 
+        'historial': 'Historial', 'ventas': 'Ventas Diarias' 
+    };
+    document.getElementById('section-title').innerText = titles[sectionId] || "Sección";
+    
+    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active-link'));
+    const btns = document.querySelectorAll('.nav-btn');
+    btns.forEach(btn => {
+        if(btn.getAttribute('onclick')?.includes(`'${sectionId}'`)) btn.classList.add('active-link');
+    });
+};
+
+window.logout = async function() {
+    if(await customConfirm({ title: 'Cerrar Sesión', text: '¿Deseas salir del sistema?', okText: 'Salir' })) {
+        await signOut(window.auth);
+    }
+};
+
+window.openModal = function(id) { 
     document.getElementById(id).classList.remove('hidden'); 
     if(id === 'modal-boleta') {
         const selectProv = document.getElementById('b-proveedor');
         selectProv.innerHTML = '<option value="">Seleccionar Proveedor...</option><option value="Particular">Particular / Otros</option>';
         proveedores.forEach(p => {
-            const opt = document.createElement('option'); opt.value = p.nombre; opt.textContent = p.nombre; selectProv.appendChild(opt);
+            const opt = document.createElement('option'); 
+            opt.value = p.nombre; 
+            opt.textContent = p.nombre; 
+            selectProv.appendChild(opt);
         });
     }
-}
+};
+window.closeModal = function(id) { 
+    document.getElementById(id).classList.add('hidden'); 
+};
 
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
-
-// --- GESTIÓN DE EMPLEADOS ---
-document.getElementById('form-empleado').onsubmit = (e) => {
+// --- GESTIÓN DE PERSONAL ---
+document.getElementById('form-empleado').onsubmit = async (e) => {
     e.preventDefault();
-    const index = document.getElementById('emp-index').value;
-    const nuevoEmp = { nombre: document.getElementById('emp-nombre').value, puesto: document.getElementById('emp-puesto').value, sueldo: parseFloat(document.getElementById('emp-sueldo').value) };
-    if(index === "") { empleados.push(nuevoEmp); } else { empleados[index] = nuevoEmp; }
-    saveData('mb_empleados', empleados); closeModal('modal-empleado'); updateEmpleadosTable(); showToast("Personal guardado");
+    const id = document.getElementById('emp-index').value;
+    const data = { 
+        nombre: document.getElementById('emp-nombre').value, 
+        puesto: document.getElementById('emp-puesto').value, 
+        sueldo: parseFloat(document.getElementById('emp-sueldo').value) 
+    };
+
+    if(id === "") {
+        await addDoc(collection(window.db, "empleados"), data);
+    } else {
+        await updateDoc(doc(window.db, "empleados", id), data);
+    }
+    closeModal('modal-empleado');
+    e.target.reset();
+    document.getElementById('emp-index').value = "";
+    showToast("Personal guardado");
 };
 
 function updateEmpleadosTable() {
     const table = document.getElementById('table-empleados');
-    table.innerHTML = empleados.map((emp, i) => `
+    if(!table) return;
+    table.innerHTML = empleados.map((emp) => `
         <tr class="hover:bg-slate-50 transition">
             <td class="p-4 font-bold text-slate-700">${emp.nombre}</td>
             <td class="p-4 text-slate-500">${emp.puesto}</td>
-            <td class="p-4 font-bold text-blue-600">$${emp.sueldo.toLocaleString()}</td>
+            <td class="p-4 font-bold text-blue-600">$${emp.sueldo.toLocaleString('es-AR')}</td>
             <td class="p-4 text-right space-x-2">
-                <button onclick="cargarSueldoComoGasto(${i})" class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded font-bold">Sueldo</button>
-                <button onclick="editEmpleado(${i})" class="text-blue-600"><i class="fas fa-edit"></i></button>
-                <button onclick="deleteEmpleado(${i})" class="text-red-400"><i class="fas fa-trash"></i></button>
+                <button onclick="cargarSueldoComoGasto('${emp.id}')" class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded font-bold">Cargar gasto</button>
+                <button onclick="editEmpleado('${emp.id}')" class="text-blue-600"><i class="fas fa-edit"></i></button>
+                <button onclick="deleteEmpleado('${emp.id}')" class="text-red-400"><i class="fas fa-trash"></i></button>
             </td>
         </tr>
     `).join('') || '<tr><td colspan="4" class="p-8 text-center text-slate-400 italic text-sm">Sin empleados.</td></tr>';
 }
 
-async function cargarSueldoComoGasto(i) {
-    const emp = empleados[i];
+window.cargarSueldoComoGasto = async function(id) {
+    const emp = empleados.find(e => e.id === id);
     if(await customConfirm({ title: 'Cargar Sueldo', text: `¿Cargar el sueldo de ${emp.nombre} como gasto?` })) {
         const hoy = new Date();
-        boletas.push({ tipo: 'Sueldos', proveedor: 'Interno', detalle: `Sueldo ${emp.nombre}`, monto: emp.sueldo, vencimiento: hoy.toISOString().split('T')[0], pagado: false, mes: hoy.getMonth() + 1, anio: hoy.getFullYear() });
-        saveData('mb_boletas', boletas); showToast("Sueldo cargado");
+        await addDoc(collection(window.db, "boletas"), {
+            tipo: 'Sueldos', 
+            proveedor: 'Interno', 
+            detalle: `Sueldo ${emp.nombre}`,
+            monto: emp.sueldo, 
+            vencimiento: getFechaOperativa(), 
+            pagado: false,
+            mes: hoy.getMonth() + 1, 
+            anio: hoy.getFullYear()
+        });
+        showToast("Sueldo cargado");
     }
-}
+};
 
-function editEmpleado(i) {
-    const emp = empleados[i]; document.getElementById('emp-index').value = i; document.getElementById('emp-nombre').value = emp.nombre; document.getElementById('emp-puesto').value = emp.puesto; document.getElementById('emp-sueldo').value = emp.sueldo; openModal('modal-empleado');
-}
+window.editEmpleado = function(id) {
+    const emp = empleados.find(e => e.id === id);
+    document.getElementById('emp-index').value = id;
+    document.getElementById('emp-nombre').value = emp.nombre;
+    document.getElementById('emp-puesto').value = emp.puesto;
+    document.getElementById('emp-sueldo').value = emp.sueldo;
+    openModal('modal-empleado');
+};
 
-async function deleteEmpleado(i) {
+window.deleteEmpleado = async function(id) {
     if(await customConfirm({ title: 'Eliminar', text: '¿Borrar empleado?', type: 'red' })) {
-        empleados.splice(i, 1); saveData('mb_empleados', empleados); updateEmpleadosTable();
+        await deleteDoc(doc(window.db, "empleados", id));
     }
-}
+};
 
-// --- GESTIÓN DE PROVEEDORES ---
-document.getElementById('form-proveedor').onsubmit = (e) => {
+// --- PROVEEDORES ---
+document.getElementById('form-proveedor').onsubmit = async (e) => {
     e.preventDefault();
-    proveedores.push({ nombre: document.getElementById('prov-nombre').value, rubro: document.getElementById('prov-rubro').value, tel: document.getElementById('prov-tel').value });
-    saveData('mb_proveedores', proveedores); closeModal('modal-proveedor'); updateProveedoresGrid(); showToast("Proveedor guardado");
+    await addDoc(collection(window.db, "proveedores"), {
+        nombre: document.getElementById('prov-nombre').value,
+        rubro: document.getElementById('prov-rubro').value,
+        tel: document.getElementById('prov-tel').value
+    });
+    closeModal('modal-proveedor');
+    e.target.reset();
+    showToast("Proveedor guardado");
 };
 
 function updateProveedoresGrid() {
     const grid = document.getElementById('grid-proveedores');
-    grid.innerHTML = proveedores.map((p, i) => `
+    if(!grid) return;
+    grid.innerHTML = proveedores.map((p) => `
         <div class="bg-white p-6 rounded-lg border shadow-sm flex justify-between items-start">
-            <div><h4 class="font-bold text-lg leading-tight">${p.nombre}</h4><p class="text-blue-600 text-xs font-bold uppercase mt-1 tracking-wider">${p.rubro}</p><p class="text-slate-500 text-sm mt-3"><i class="fas fa-phone mr-1"></i> ${p.tel || 'S/T'}</p></div>
-            <button onclick="deleteProveedor(${i})" class="text-slate-300 hover:text-red-500"><i class="fas fa-times-circle"></i></button>
+            <div><h4 class="font-bold text-lg leading-tight">${p.nombre}</h4>
+            <p class="text-blue-600 text-xs font-bold uppercase mt-1 tracking-wider">${p.rubro}</p>
+            <p class="text-slate-500 text-sm mt-3"><i class="fas fa-phone mr-1"></i> ${p.tel || 'S/T'}</p></div>
+            <button onclick="deleteProveedor('${p.id}')" class="text-slate-300 hover:text-red-500"><i class="fas fa-times-circle"></i></button>
         </div>
     `).join('') || '<p class="col-span-3 text-center p-8 text-slate-400 italic">Sin proveedores.</p>';
 }
 
-async function deleteProveedor(i) {
+window.deleteProveedor = async function(id) {
     if(await customConfirm({ title: 'Eliminar', text: '¿Borrar proveedor?', type: 'red' })) {
-        proveedores.splice(i, 1); saveData('mb_proveedores', proveedores); updateProveedoresGrid();
+        await deleteDoc(doc(window.db, "proveedores", id));
     }
-}
+};
 
-// --- GESTIÓN DE BOLETAS ---
-function setFilter(filter) {
-    currentFilter = filter; document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active-filter')); document.getElementById('filter-' + filter).classList.add('active-filter'); updateBoletasTable();
-}
+// --- GASTOS / BOLETAS ---
+window.setFilter = function(filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active-filter'));
+    document.getElementById('filter-' + filter).classList.add('active-filter');
+    updateBoletasTable();
+};
 
-document.getElementById('form-boleta').onsubmit = (e) => {
-    e.preventDefault(); const hoy = new Date();
-    boletas.push({ tipo: document.getElementById('b-tipo').value, proveedor: document.getElementById('b-proveedor').value, detalle: document.getElementById('b-detalle').value, monto: parseFloat(document.getElementById('b-monto').value), vencimiento: document.getElementById('b-vencimiento').value, pagado: false, mes: hoy.getMonth() + 1, anio: hoy.getFullYear() });
-    saveData('mb_boletas', boletas); closeModal('modal-boleta'); updateBoletasTable(); showToast("Gasto registrado");
+document.getElementById('form-boleta').onsubmit = async (e) => {
+    e.preventDefault();
+    const hoy = new Date();
+    await addDoc(collection(window.db, "boletas"), {
+        tipo: document.getElementById('b-tipo').value,
+        proveedor: document.getElementById('b-proveedor').value,
+        detalle: document.getElementById('b-detalle').value,
+        monto: parseFloat(document.getElementById('b-monto').value),
+        vencimiento: document.getElementById('b-vencimiento').value,
+        pagado: false, 
+        mes: hoy.getMonth() + 1, 
+        anio: hoy.getFullYear()
+    });
+    closeModal('modal-boleta');
+    e.target.reset();
+    showToast("Gasto registrado");
 };
 
 function updateBoletasTable() {
-    const hoy = new Date();
-    let boletasFiltradas = boletas.filter(b => {
-        const diff = Math.ceil((new Date(b.vencimiento) - hoy) / 86400000);
+    const table = document.getElementById('table-boletas');
+    if(!table) return;
+    const hoyFormateado = getFechaOperativa();
+    
+    let filtradas = boletas.filter(b => {
+        const diff = Math.ceil((new Date(b.vencimiento) - new Date(hoyFormateado)) / 86400000);
         if (currentFilter === 'pagado') return b.pagado;
         if (currentFilter === 'pendiente') return !b.pagado && diff >= 0;
         if (currentFilter === 'vencido') return !b.pagado && diff < 0;
         return true; 
     });
 
-    document.getElementById('table-boletas').innerHTML = boletasFiltradas.map((b, i) => {
-        const originalIndex = boletas.indexOf(b); 
-        const diff = Math.ceil((new Date(b.vencimiento) - hoy) / (86400000));
+    table.innerHTML = filtradas.map((b) => {
+        const diff = Math.ceil((new Date(b.vencimiento) - new Date(hoyFormateado)) / 86400000);
         let badge = b.pagado ? 'bg-green-100 text-green-700' : (diff < 0 ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-700');
         let text = b.pagado ? 'PAGADO' : (diff < 0 ? 'VENCIDO' : `Faltan ${diff}d`);
         return `
             <tr class="hover:bg-slate-50 transition">
                 <td class="p-4 font-bold text-xs text-slate-400 uppercase">${b.tipo}</td>
                 <td class="p-4"><span class="font-bold block text-slate-700">${b.proveedor}</span><span class="text-[10px] text-slate-400 italic">${b.detalle}</span></td>
-                <td class="p-4 text-slate-500">${b.vencimiento}</td>
-                <td class="p-4 font-bold text-slate-800">$${b.monto.toLocaleString()}</td>
+                <td class="p-4 text-slate-500">${formatDateForDisplay(b.vencimiento)}</td>
+                <td class="p-4 font-bold text-slate-800">$${b.monto.toLocaleString('es-AR')}</td>
                 <td class="p-4"><span class="px-2 py-1 rounded text-[10px] font-black ${badge}">${text}</span></td>
                 <td class="p-4 text-right">
-                    ${!b.pagado ? `<button onclick="pagar(${originalIndex})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs shadow hover:bg-blue-700 transition">PAGAR</button>` : '<i class="fas fa-check-circle text-green-500 text-lg"></i>'}
+                    ${!b.pagado ? `<button onclick="pagar('${b.id}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs shadow hover:bg-blue-700 transition">PAGAR</button>` : '<i class="fas fa-check-circle text-green-500 text-lg"></i>'}
                 </td>
             </tr>
         `;
     }).join('') || '<tr><td colspan="6" class="p-12 text-center text-slate-300 italic">Nada por aquí.</td></tr>';
 }
 
-async function pagar(i) {
-    if (await customConfirm({ title: 'Confirmar Pago', text: `¿Marcas como paga esta boleta de $${boletas[i].monto.toLocaleString()}?` })) {
-        boletas[i].pagado = true; saveData('mb_boletas', boletas); updateBoletasTable(); showToast("Pago registrado");
+window.pagar = async function(id) {
+    const b = boletas.find(x => x.id === id);
+    if (await customConfirm({ title: 'Confirmar Pago', text: `¿Marcas como paga esta boleta de $${b.monto.toLocaleString('es-AR')}?` })) {
+        await updateDoc(doc(window.db, "boletas", id), { pagado: true });
+        showToast("Pago registrado");
     }
-}
+};
 
-// --- DASHBOARD ---
+// --- DASHBOARD (ACTUALIZADO: SOLO VENCIMIENTOS PRÓXIMOS) ---
 function updateDashboard() {
-    const hoy = new Date(); const mesActual = hoy.getMonth() + 1; const anioActual = hoy.getFullYear();
+    const hoy = new Date(); 
+    const mesA = hoy.getMonth() + 1; 
+    const anioA = hoy.getFullYear();
+    const hoyF = getFechaOperativa();
+    
     let stats = { vencidas: 0, porVencer: 0, pagado: 0, pendiente: 0 };
     let categorias = {};
-    const boletasMes = boletas.filter(b => b.mes === mesActual && b.anio === anioActual);
+    let proximosVencimientos = []; // Para guardar los datos del aviso
 
-    boletasMes.forEach(b => {
-        const diff = Math.ceil((new Date(b.vencimiento) - hoy) / 86400000);
-        if(b.pagado) stats.pagado += b.monto;
-        else {
+    const delMes = boletas.filter(b => b.mes === mesA && b.anio === anioA);
+    
+    delMes.forEach(b => {
+        const diff = Math.ceil((new Date(b.vencimiento) - new Date(hoyF)) / 86400000);
+        
+        if(b.pagado) {
+            stats.pagado += b.monto;
+        } else {
             stats.pendiente += b.monto;
-            if(diff < 0) stats.vencidas++; else if(diff <= 7) stats.porVencer++;
+            if(diff < 0) {
+                stats.vencidas++; 
+            } else if(diff <= 7) {
+                stats.porVencer++;
+                // Guardamos la info para el aviso
+                proximosVencimientos.push({
+                    proveedor: b.proveedor,
+                    monto: b.monto,
+                    dias: diff
+                });
+            }
         }
         categorias[b.tipo] = (categorias[b.tipo] || 0) + b.monto;
     });
 
-    document.getElementById('kpi-cards').innerHTML = `
-        <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-red-500"><p class="text-slate-500 text-xs font-bold uppercase">Vencidas</p><h3 class="text-3xl font-bold text-red-600 mt-1">${stats.vencidas}</h3></div>
-        <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-yellow-500"><p class="text-slate-500 text-xs font-bold uppercase">A vencer (7d)</p><h3 class="text-3xl font-bold text-yellow-600 mt-1">${stats.porVencer}</h3></div>
-        <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-green-500"><p class="text-slate-500 text-xs font-bold uppercase">Pagado Mes</p><h3 class="text-3xl font-bold text-green-600 mt-1">$${stats.pagado.toLocaleString()}</h3></div>
-        <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500"><p class="text-slate-500 text-xs font-bold uppercase">Deuda Pendiente</p><h3 class="text-3xl font-bold text-blue-600 mt-1">$${stats.pendiente.toLocaleString()}</h3></div>
-    `;
+    // 1. Actualizar las tarjetas superiores (KPIs)
+    const kpi = document.getElementById('kpi-cards');
+    if(kpi) {
+        kpi.innerHTML = `
+            <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-red-500"><p class="text-slate-500 text-xs font-bold uppercase">Vencidas</p><h3 class="text-3xl font-bold text-red-600 mt-1">${stats.vencidas}</h3></div>
+            <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-yellow-500"><p class="text-slate-500 text-xs font-bold uppercase">A vencer (7d)</p><h3 class="text-3xl font-bold text-yellow-600 mt-1">${stats.porVencer}</h3></div>
+            <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-green-500"><p class="text-slate-500 text-xs font-bold uppercase">Pagado Mes</p><h3 class="text-3xl font-bold text-green-600 mt-1">$${stats.pagado.toLocaleString('es-AR')}</h3></div>
+            <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500"><p class="text-slate-500 text-xs font-bold uppercase">Deuda Pendiente</p><h3 class="text-3xl font-bold text-blue-600 mt-1">$${stats.pendiente.toLocaleString('es-AR')}</h3></div>
+        `;
+    }
 
+    // 2. Actualizar el cuadro de "Aviso del Sistema" (Solo vencimientos)
+    const statusEl = document.getElementById('status-message');
+    if(statusEl) {
+        if(proximosVencimientos.length > 0) {
+            // Ordenar para que el que vence más pronto aparezca primero
+            proximosVencimientos.sort((a, b) => a.dias - b.dias);
+            
+            statusEl.innerHTML = `
+                <div class="space-y-3">
+                    ${proximosVencimientos.map(v => `
+                        <div class="flex justify-between items-center bg-slate-50 p-2 rounded border-l-2 border-yellow-400">
+                            <div>
+                                <p class="text-sm font-bold text-slate-700">${v.proveedor}</p>
+                                <p class="text-[10px] text-slate-500 italic">Monto: $${v.monto.toLocaleString('es-AR')}</p>
+                            </div>
+                            <span class="text-[10px] font-black bg-yellow-100 text-yellow-700 px-2 py-1 rounded">
+                                FALTAN ${v.dias} DÍAS
+                            </span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            statusEl.innerHTML = `<p class="text-slate-400 italic text-sm text-center py-2">No hay vencimientos próximos en los siguientes 7 días.</p>`;
+        }
+    }
+
+    // 3. Actualizar gráfico de categorías
     const total = stats.pagado + stats.pendiente;
-    document.getElementById('category-chart').innerHTML = Object.entries(categorias).map(([cat, m]) => `
-        <div><div class="flex justify-between text-xs mb-1"><span class="font-bold text-slate-500 uppercase">${cat}</span><span class="font-black">$${m.toLocaleString()}</span></div><div class="w-full bg-slate-50 h-2 rounded-full overflow-hidden border"><div class="bg-blue-600 h-full" style="width: ${Math.min((m/total)*100, 100)}%"></div></div></div>
-    `).join('') || '<p class="text-slate-300 italic text-sm">Sin movimientos.</p>';
-}
-
-// --- HISTORIAL ---
-async function confirmarFinalizarMes() {
-    if(await customConfirm({ title: 'Finalizar Mes', text: 'Se archivarán las boletas pagadas y se limpiará el Dashboard.' })) {
-        const periodo = new Date().toLocaleString('es-AR', { month: 'long', year: 'numeric' });
-        const total = boletas.filter(b => b.pagado).reduce((acc, b) => acc + b.monto, 0);
-        historial.push({ periodo, cant: boletas.filter(b => b.pagado).length, total, id: Date.now(), fechaCierre: new Date().toISOString() });
-        boletas = boletas.filter(b => !b.pagado); saveData('mb_boletas', boletas); saveData('mb_historial', historial); updateDashboard(); showToast("Mes archivado");
+    const chart = document.getElementById('category-chart');
+    if(chart) {
+        chart.innerHTML = Object.entries(categorias).map(([cat, m]) => `
+            <div><div class="flex justify-between text-xs mb-1"><span class="font-bold text-slate-500 uppercase">${cat}</span><span class="font-black">$${m.toLocaleString('es-AR')}</span></div><div class="w-full bg-slate-50 h-2 rounded-full overflow-hidden border"><div class="bg-blue-600 h-full" style="width: ${Math.min((m/total)*100, 100)}%"></div></div></div>
+        `).join('') || '<p class="text-slate-300 italic text-sm">Sin movimientos.</p>';
     }
 }
 
-function updateHistorialTable() {
-    const query = document.getElementById('history-search').value.toLowerCase();
-    const historialFiltrado = historial.filter(h => h.periodo.toLowerCase().includes(query));
-    
-    document.getElementById('table-historial').innerHTML = historialFiltrado.map(h => `
+// --- VENTAS DIARIAS ---
+function updateVentasUI() {
+    const table = document.getElementById('table-ventas');
+    const totalMesDisplay = document.getElementById('ventas-total-mes');
+    if (!table || !totalMesDisplay) return;
+
+    const sortedVentas = [...ventasDiarias].sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+    table.innerHTML = sortedVentas.map((v) => `
         <tr class="hover:bg-slate-50 transition">
-            <td class="p-4 font-bold capitalize text-slate-700">${h.periodo}<div class="text-[9px] text-slate-400 font-normal uppercase mt-1">Cierre: ${new Date(h.fechaCierre).toLocaleDateString()}</div></td>
-            <td class="p-4 text-slate-500 font-medium">${h.cant} boletas</td>
-            <td class="p-4 font-black text-blue-600">$${h.total.toLocaleString()}</td>
-            <td class="p-4 text-right"><span class="text-[10px] bg-slate-100 px-3 py-1 rounded-full font-black text-slate-400 tracking-tighter uppercase">Archivado</span></td>
+            <td class="p-4 font-bold text-slate-700">${formatDateForDisplay(v.fecha)}</td>
+            <td class="p-4 font-bold text-blue-600">$${v.monto.toLocaleString('es-AR')}</td>
+            <td class="p-4 text-right space-x-3">
+                <button onclick="editVenta('${v.id}')" class="text-blue-500 hover:text-blue-700" title="Editar"><i class="fas fa-edit"></i></button>
+                <button onclick="deleteVenta('${v.id}')" class="text-red-300 hover:text-red-500" title="Eliminar"><i class="fas fa-trash"></i></button>
+            </td>
         </tr>
-    `).reverse().join('') || '<tr><td colspan="4" class="p-12 text-center text-slate-300 italic">No se encontraron registros.</td></tr>';
+    `).join('') || '<tr><td colspan="3" class="p-8 text-center text-slate-400 italic">No hay cierres este mes.</td></tr>';
+
+    const total = ventasDiarias.reduce((acc, v) => acc + v.monto, 0);
+    totalMesDisplay.innerText = `$${total.toLocaleString('es-AR')}`;
 }
 
-async function borrarHistorialCompleto() {
-    if(await customConfirm({ title: 'Borrar Todo', text: 'Se eliminará todo el historial permanentemente. ¿Estás seguro?', type: 'red', okText: 'Borrar Historial' })) {
-        historial = []; saveData('mb_historial', historial); updateHistorialTable(); showToast("Historial eliminado");
+async function handleCerrarCaja() {
+    const inputMonto = document.getElementById('venta-monto');
+    const monto = parseFloat(inputMonto.value);
+    if (!monto || monto <= 0) return showToast("Monto inválido");
+
+    const hoy = getFechaOperativa(); 
+    const existe = ventasDiarias.find(v => v.fecha === hoy);
+
+    if (existe) {
+        if(!(await customConfirm({ title: 'Ya registrado', text: `¿Sobrescribir el cierre de ${formatDateForDisplay(hoy)}?` }))) return;
+        await deleteDoc(doc(window.db, "ventas", existe.id));
     }
+
+    await addDoc(collection(window.db, "ventas"), { fecha: hoy, monto: monto });
+    inputMonto.value = '';
+    showToast("Cierre de caja guardado");
 }
 
-function saveData(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+window.editVenta = function(id) {
+    const v = ventasDiarias.find(x => x.id === id);
+    document.getElementById('venta-monto').value = v.monto;
+    document.getElementById('venta-monto').focus();
+    showToast("Edita el monto y vuelve a Cerrar Caja");
+};
+
+window.deleteVenta = async function(id) {
+    if(await customConfirm({ title: 'Eliminar', text: '¿Borrar este registro?', type: 'red' })) {
+        await deleteDoc(doc(window.db, "ventas", id));
+    }
+};
+
+// --- FINALIZAR MES Y HISTORIAL ---
+window.confirmarFinalizarMes = async function() {
+    if(await customConfirm({ title: 'Finalizar Mes', text: 'Se archivarán los gastos pagados y ventas. Esta acción vaciará las tablas actuales.' })) {
+        const batch = writeBatch(window.db);
+        const periodo = new Date().toLocaleString('es-AR', { month: 'long', year: 'numeric' });
+        
+        const totalGastos = boletas.filter(b => b.pagado).reduce((acc, b) => acc + b.monto, 0);
+        const totalVentas = ventasDiarias.reduce((acc, v) => acc + v.monto, 0);
+
+        const histRef = doc(collection(window.db, "historial"));
+        batch.set(histRef, {
+            periodo, 
+            cant: boletas.filter(b => b.pagado).length,
+            totalGastos, 
+            totalVentas,
+            fechaCierre: new Date().toISOString()
+        });
+
+        boletas.filter(b => b.pagado).forEach(b => {
+            batch.delete(doc(window.db, "boletas", b.id));
+        });
+
+        ventasDiarias.forEach(v => {
+            batch.delete(doc(window.db, "ventas", v.id));
+        });
+
+        await batch.commit();
+        showToast("Mes finalizado y archivado");
+    }
+};
+
+window.updateHistorialTable = function() {
+    const table = document.getElementById('table-historial');
+    if(!table) return;
+    const queryStr = document.getElementById('history-search').value.toLowerCase();
+    const filtrado = historial.filter(h => h.periodo.toLowerCase().includes(queryStr));
+    
+    table.innerHTML = filtrado.map(h => `
+        <tr class="hover:bg-slate-50 transition text-sm">
+            <td class="p-4 font-bold capitalize text-slate-700">${h.periodo}</td>
+            <td class="p-4 text-slate-500 font-medium">${h.cant} boletas</td>
+            <td class="p-4 font-black text-green-600">$${(h.totalVentas || 0).toLocaleString('es-AR')}</td>
+            <td class="p-4 font-black text-red-600">$${(h.totalGastos || 0).toLocaleString('es-AR')}</td>
+            <td class="p-4 text-right"><span class="text-[10px] bg-slate-100 px-3 py-1 rounded-full font-black text-slate-400 uppercase">Archivado</span></td>
+        </tr>
+    `).join('') || '<tr><td colspan="5" class="p-12 text-center text-slate-300 italic">No hay registros.</td></tr>';
+};
+
+window.borrarHistorialCompleto = async function() {
+    if(await customConfirm({ title: 'Borrar Todo', text: 'Se eliminará el historial para siempre.', type: 'red' })) {
+        const batch = writeBatch(window.db);
+        historial.forEach(h => batch.delete(doc(window.db, "historial", h.id)));
+        await batch.commit();
+        showToast("Historial eliminado");
+    }
+};
