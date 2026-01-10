@@ -137,9 +137,9 @@ window.showSection = function(sectionId) {
     if(target) target.classList.remove('hidden');
 
     const titles = { 
-        'dashboard': 'Dashboard', 'boletas': 'Gastos del Mes', 
+        'dashboard': 'Dashboard', 'boletas': 'Gastos del mes', 
         'empleados': 'Personal', 'proveedores': 'Proveedores', 
-        'historial': 'Historial', 'ventas': 'Ventas Diarias' 
+        'historial': 'Historial', 'ventas': 'Ventas diarias' 
     };
     document.getElementById('section-title').innerText = titles[sectionId] || "Sección";
     
@@ -151,7 +151,7 @@ window.showSection = function(sectionId) {
 };
 
 window.logout = async function() {
-    if(await customConfirm({ title: 'Cerrar Sesión', text: '¿Deseas salir del sistema?', okText: 'Salir' })) {
+    if(await customConfirm({ title: 'Cerrar sesión', text: '¿Deseas salir del sistema?', okText: 'Salir' })) {
         await signOut(window.auth);
     }
 };
@@ -160,7 +160,7 @@ window.openModal = function(id) {
     document.getElementById(id).classList.remove('hidden'); 
     if(id === 'modal-boleta') {
         const selectProv = document.getElementById('b-proveedor');
-        selectProv.innerHTML = '<option value="">Seleccionar Proveedor...</option><option value="Particular">Particular / Otros</option>';
+        selectProv.innerHTML = '<option value="">Seleccionar Proveedor...</option><option value="Particular">Particular</option>';
         proveedores.forEach(p => {
             const opt = document.createElement('option'); 
             opt.value = p.nombre; 
@@ -470,7 +470,7 @@ window.editVenta = function(id) {
     const v = ventasDiarias.find(x => x.id === id);
     document.getElementById('venta-monto').value = v.monto;
     document.getElementById('venta-monto').focus();
-    showToast("Edita el monto y vuelve a Cerrar Caja");
+    showToast("Edita el monto y vuelve a cerrar caja");
 };
 
 window.deleteVenta = async function(id) {
@@ -481,7 +481,7 @@ window.deleteVenta = async function(id) {
 
 // --- FINALIZAR MES Y HISTORIAL ---
 window.confirmarFinalizarMes = async function() {
-    if(await customConfirm({ title: 'Finalizar Mes', text: 'Se archivarán los gastos pagados y ventas. Esta acción vaciará las tablas actuales.' })) {
+    if(await customConfirm({ title: 'Finalizar mes', text: 'Se archivarán los gastos pagados y ventas. Esta acción vaciará las tablas actuales.' })) {
         const batch = writeBatch(window.db);
         const periodo = new Date().toLocaleString('es-AR', { month: 'long', year: 'numeric' });
         
@@ -528,7 +528,7 @@ window.updateHistorialTable = function() {
 };
 
 window.borrarHistorialCompleto = async function() {
-    if(await customConfirm({ title: 'Borrar Todo', text: 'Se eliminará el historial para siempre.', type: 'red' })) {
+    if(await customConfirm({ title: 'Borrar historial', text: 'Se eliminará el historial para siempre.', type: 'red' })) {
         const batch = writeBatch(window.db);
         historial.forEach(h => batch.delete(doc(window.db, "historial", h.id)));
         await batch.commit();
